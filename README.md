@@ -14,6 +14,13 @@ This is a Flask web application that uses the OpenAI API to generate structured 
 
 ---
 
+## Live Web App
+
+You can access the deployed web application here:  
+[PDF Summarizer on Render](https://bfs-pdf-summarizer.onrender.com)  
+
+---
+
 ## Technologies Used
 
 - **Python** (Flask)
