@@ -1,0 +1,6 @@
+# Exclude sensitive files
+.env
+
+# Python exclusions
+__pycache__/
+*.pyc
