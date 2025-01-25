@@ -3,3 +3,4 @@ openai
 flask
 pypdf2
 gunicorn
+python-docx
