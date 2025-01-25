@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 from flask import Flask, request, jsonify, render_template
 from PyPDF2 import PdfReader
+from docx import Document
 import re
 
 app = Flask(__name__)
@@ -14,49 +15,42 @@ load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialize the OpenAI client with your API key
-client = OpenAI(api_key=api_key)  # Replace with your actual API key
+client = OpenAI(api_key=api_key)  
 
 # Helper function to format and filter the summary
 def process_summary(text):
-    lines = text.splitlines()  # Split the text into individual lines
+    lines = text.splitlines()
     processed_lines = []
     current_point = None
     current_subpoints = []
     
     for line in lines:
-        line = line.strip()
-        
-        # Skip empty lines
+        line = line.replace("**", "")    
         if not line:
             continue
         
-        # Handle main points (lines ending with ':')
-        if line.endswith(':'):
-            if current_point:  # If there was a previous main point, process its sub-points
-                if current_subpoints:
-                    processed_lines.append(f"<strong>{current_point}</strong>")
-                    processed_lines.extend([f"<li>{sub}</li>" for sub in current_subpoints])
+        # Identify main points enclosed in '**'
+        if line.startswith('- ') and line.endswith(':'):
+            if current_point:
+                processed_lines.append(f"<strong>{current_point}</strong>")
+                processed_lines.extend([f"<li>{sub}</li>" for sub in current_subpoints])
                 current_subpoints = []
             
-            # Clean the main point
-            clean_point = re.sub(r"^\d+\.\s*", "", line).strip(":")
-            current_point = clean_point
+            current_point = line.lstrip('- ').rstrip(':').strip()
         
-        # Handle sub-points (lines starting with '-')
-        elif line.startswith('-'):
-            clean_subpoint = re.sub(r"^\d+\.\s*", "", line).lstrip("-").strip()
-            current_subpoints.append(clean_subpoint)
+        # Identify subpoints
+        elif line.startswith(' ') and '-' in line:
+            current_subpoints.append(line.lstrip('- ').strip())
     
-    # Add the last point and its sub-points
-    if current_point and current_subpoints:
+    # Append last detected main point and its subpoints
+    if current_point:
         processed_lines.append(f"<strong>{current_point}</strong>")
         processed_lines.extend([f"<li>{sub}</li>" for sub in current_subpoints])
-    
-    # Return the processed HTML-formatted summary
+        
     return "\n".join(processed_lines)
 
 # Helper function to split text into chunks with overlap
-def split_text_with_overlap(text, max_tokens=1500, overlap=100):
+def split_text_with_overlap(text, max_tokens=1500, overlap=50):
     words = text.split()
     start = 0
     while start < len(words):
@@ -69,21 +63,61 @@ def split_text_with_overlap(text, max_tokens=1500, overlap=100):
 def openai_summarize_with_context(text, previous_summary=""):
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # You can also use 'gpt-4' if available
+            model="gpt-4o-mini", #gpt-3.5-turbo
             messages=[
-                {"role": "system", "content": "You are a concise and detail-focused summarizer."},
-                {"role": "user", "content": f"Here is a summary of the previous section: {previous_summary}. Now, please summarize the following text into brief and concise bullet points with two or three sub-points for each main point: {text}"}
-            ],
-            max_tokens=500  # Adjust based on how detailed the summary should be
+                {"role": "system", "content": """
+                Create a detailed and focused summary of a given regulatory document. The summary should include important metrics and key points, structured to allow the user to understand the main content without reading the original document.
+
+                - Focus on identifying the most significant points and metrics in the regulatory document.
+                - Organize the summary logically, covering each key aspect thoroughly.
+                - Ensure the summary is comprehensive enough to provide a clear understanding of the original content.
+
+                # Steps
+
+                1. Read the given regulatory document thoroughly.
+                2. Identify and extract the most important metrics and key points.
+                3. Organize these points logically to form a coherent summary.
+                4. Compose the summary in a clear and detailed manner, ensuring it is understandable without reference to the original text.
+
+                # Output Format
+
+                - A well-structured summary in bullet points with sub-points for each main point.
+                - Should be 150-250 words for optimal detail and comprehensiveness.
+
+                # Examples
+
+                **Input:** "The regulatory document mandates a 20% reduction in emission levels by 2030, introduces a compliance framework with quarterly reporting and penalties for non-compliance..."
+
+                **Output:** 
+                - **Emission Reduction Goals:**
+                  - 20% reduction by 2030
+                  - Implementation strategies outlined
+                  - Monitoring and reporting mechanisms established
+                - **Compliance Framework:**
+                  - Quarterly reporting requirements detailed
+                  - Penalties for non-compliance specified
+                  - Incentives for early compliance offered
+                - **Additional Regulations:**
+                  - New standards for industrial emissions
+                  - Alignment with international guidelines
+                  - Impact assessment procedures included (Real examples should be longer.)
+
+                # Notes
+
+                - Pay special attention to regulatory data, compliance metrics, and guidelines as they are crucial to understanding the document.
+                - Ensure the summary is detailed to clearly convey the regulatory requirements and implications, maintaining clarity while thoroughly capturing the essence of the original content."""},
+                {"role": "user", "content": f"{text}"}
+                ],
+            max_tokens=1500
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error calling OpenAI API: {e}")
         return None
 
-# Helper function to summarize the entire PDF using rolling context
-def summarize_pdf_text_with_context(pdf_text):
-    chunks = list(split_text_with_overlap(pdf_text, max_tokens=1500, overlap=100))
+# Helper function to summarize the entire document using rolling context
+def summarize_text_with_context(text):
+    chunks = list(split_text_with_overlap(text, max_tokens=1500, overlap=50))
     full_summary = []
     previous_summary = ""
 
@@ -110,7 +144,27 @@ def openai_generate_title(text):
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error generating title: {e}")
-        return "PDF Summary"  # Fallback title if generation fails
+        return "Document Summary"  # Fallback title if generation fails
+
+# Helper function to extract text from Word documents
+def extract_text_from_word(docx_file):
+    try:
+        doc = Document(docx_file)
+        return '\n'.join([paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip()])
+    except Exception as e:
+        print(f"Error extracting text from Word document: {e}")
+        return ""
+
+# Helper function to filter out contents pages
+def filter_contents_page(text):
+    lines = text.splitlines()
+    filtered_lines = []
+    for line in lines:
+        # Skip lines indicating contents, e.g., "Table of Contents", or lines with page numbers
+        if re.search(r"Table of Contents|\.{5,}|\b\d+\b", line):
+            continue
+        filtered_lines.append(line)
+    return '\n'.join(filtered_lines)
 
 @app.route('/')
 def index():
@@ -123,43 +177,50 @@ def summarize():
 
     file = request.files['file']
 
-    # Check if the file is a valid PDF
-    if file.filename == '' or not file.filename.endswith('.pdf'):
+    # Check if the file is a valid PDF or Word document
+    if file.filename == '' or not (file.filename.endswith('.pdf') or file.filename.endswith('.docx')):
         return jsonify({'error': 'Invalid file format'}), 400
 
-    # Extract text from the PDF
+    # Extract text from the file
     try:
-        reader = PdfReader(file)
-        pdf_text = ""
-        for page in reader.pages:
-            pdf_text += page.extract_text()
+        if file.filename.endswith('.pdf'):
+            reader = PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text()
+        elif file.filename.endswith('.docx') or file.filename.endswith('.doc'):
+            text = extract_text_from_word(file)
 
-        # If the PDF has no extractable text, return an error
-        if not pdf_text.strip():
-            return jsonify({'error': 'The PDF has no readable text'}), 400
+        # If the document has no extractable text, return an error
+        if not text.strip():
+            return jsonify({'error': 'The document has no readable text'}), 400
+
+        # Filter out the contents page
+        text = filter_contents_page(text)
 
     except Exception as e:
         print(f'Error extracting text: {e}')
-        return jsonify({'error': f'Error processing PDF: {str(e)}'}), 500
+        return jsonify({'error': f'Error processing document: {str(e)}'}), 500
 
     # Generate title using the first chunk of the text
-    first_chunk = next(split_text_with_overlap(pdf_text, max_tokens=1500), "")
+    first_chunk = next(split_text_with_overlap(text, max_tokens=1500), "")
     generated_title = openai_generate_title(first_chunk)
     
-    # remove word 'summary' if present
+    # Remove word 'summary' if present in the title
     if 'summary' in generated_title.lower():
         generated_title = re.sub(r'\b[Ss]ummary\b', '', generated_title).strip()
 
     # Summarize the extracted text using OpenAI API with rolling context
     try:
-        structured_summary = summarize_pdf_text_with_context(pdf_text)
+        structured_summary = summarize_text_with_context(text)
+        if structured_summary:
+            print(structured_summary)
         formatted_summary = process_summary(structured_summary)
     except Exception as e:
-        return jsonify({'error': f'Error summarizing PDF: {str(e)}'}), 500
+        return jsonify({'error': f'Error summarizing document: {str(e)}'}), 500
 
     # Return the structured summary as JSON
     return jsonify({'title': f"{generated_title} Summary", 'summary': formatted_summary})
 
-'''if __name__ == '__main__':
-    app.run(debug=True)
-'''
+# if __name__ == '__main__':
+#     app.run(debug=True)
