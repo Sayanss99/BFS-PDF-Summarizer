@@ -26,6 +26,7 @@ You can access the deployed web application here:
 - **Python** (Flask)
 - **OpenAI API** (GPT-3.5 Turbo)
 - **PyPDF2** (for PDF text extraction)
+- - **Python-docx** (for word doc text extraction)
 - **Gunicorn** (for production deployment)
 - **HTML/CSS/JavaScript** (for the frontend)
 
